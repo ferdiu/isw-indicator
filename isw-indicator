@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os
+import subprocess
+import signal
+import time
+
+import gi.repository
+
+gi.require_version('Gtk', '3.0')
+gi.require_version('AppIndicator3', '0.1')
+from gi.repository import Gtk, GLib
+from gi.repository import AppIndicator3
+
+# /usr/share/icons/Papirus/symbolic/status/power-profile-balanced-symbolic.svg
+# /usr/share/icons/Papirus/symbolic/status/power-profile-performance-symbolic.svg
+# /usr/share/icons/Papirus/symbolic/status/power-profile-power-saver-symbolic.svg
+
+# /usr/share/icons/Papirus/symbolic/status/battery-level-60-symbolic.svg
+# /usr/share/icons/Papirus/symbolic/status/battery-level-80-symbolic.svg
+# /usr/share/icons/Papirus/symbolic/status/battery-level-100-symbolic.svg
+
+# /usr/share/icons/Papirus/symbolic/status/sensors-fan-symbolic.svg
+
+# /usr/share/icons/Papirus/symbolic/status/keyboard-brightness-symbolic.svg
+
+def _setup_radio_box(parent, label, func, options, actions, current_value = None):
+    if len(options) != len(actions):
+        print('error: mismatching length between `options` and `actions` vectors')
+        return
+    submenu_item = Gtk.MenuItem(label = label)
+    parent.append(submenu_item)
+
+    submenu_menu = Gtk.Menu()
+    submenu_item.set_submenu(submenu_menu)
+
+    btns = []
+    for (opt, act) in zip(options, actions):
+        btns.append(Gtk.RadioMenuItem.new_with_label_from_widget(None if len(btns) == 0 else btns[-1], label = opt))
+        if str(current_value) == str(act):
+            btns[-1].set_active(True)
+        btns[-1].connect('toggled', lambda btn, act: func(act) if btn.get_active() else None, act)
+        submenu_menu.append(btns[-1])
+        btns[-1].show()
+
+    submenu_item.show()
+    return submenu_item
+
+
+class ISWIndicator:
+    def __init__(self):
+        self.ind = AppIndicator3.Indicator.new('ISW Indicator', '', AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
+        self.ind.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
+        self.ind.set_icon_full('/usr/share/isw-indicator/msi-logo-symbolic.svg', 'ISW Center')
+        self.auto_shift_mode = True
+
+        self.menu_setup()
+        self.ind.set_menu(self.menu)
+        GLib.timeout_add(3000, self.indicator_loop)
+
+    def indicator_loop(self):
+        if self.auto_shift_mode:
+            self._auto_shift_mode()
+        return True # TODO: optimize
+
+    def menu_setup(self):
+        self.menu = Gtk.Menu()
+
+        self.info_item = Gtk.MenuItem(label = 'ISW Center')
+        self.info_item.set_sensitive(False)
+        self.info_item.show()
+        self.menu.append(self.info_item)
+        self.seperator_item = Gtk.SeparatorMenuItem()
+        self.seperator_item.show()
+        self.menu.append(self.seperator_item)
+
+        self.sm_item = _setup_radio_box(
+            self.menu,
+            'Shift Mode',
+            self.set_shift_mode,
+            ['auto', 'eco', 'comfort', 'turbo'],
+            ['auto', 'eco', 'comfort', 'turbo'],
+            'auto' if self.auto_shift_mode else self.get_shift_mode()
+        )
+        self.sm_item.show()
+
+        self.bt_item = _setup_radio_box(
+            self.menu,
+            'Battery Threshold',
+            self.set_battery_threshold,
+            ['50-60', '70-80', '90-100'],
+            [60, 80, 100],
+            self.get_battery_threshold()
+        )
+        self.bt_item.show()
+
+        self.ub_item = _setup_radio_box(
+            self.menu,
+            'USB Backlight',
+            self.set_usb_backlight,
+            ['off', 'on', 'half', 'full'],
+            ['off', 'on', 'half', 'full'],
+            self.get_usb_backlight()
+        )
+        self.ub_item.show()
+
+        self.cb_item = Gtk.CheckMenuItem(label = 'Cooler Boost')
+        self.cb_item.connect('toggled',
+            lambda cb: self.set_cooler_boost('on' if cb.get_active() else 'off'))
+        self.menu.append(self.cb_item)
+        self.cb_item.show()
+
+        self.menu.show_all()
+        return self.menu
+
+    def get_power_profile(self):
+        # performance, balanced or power-saver
+        return subprocess.getoutput('/usr/bin/powerprofilesctl get')
+
+    def set_power_profile(self, value):
+        if not (value in ['performance', 'balanced', 'power-saver']):
+            print('error: unknown power profile ' + str(value))
+            return
+        return subprocess.getoutput('/usr/bin/powerprofilesctl get')
+
+    def get_shift_mode(self):
+        # eco, comfort or turbo
+        return subprocess.getoutput('/usr/bin/isw-user -S')
+
+    def _auto_shift_mode(self):
+        pp = self.get_power_profile()
+        sm = self.get_shift_mode()
+        if pp == 'power-saver' and sm != 'eco':
+            self.set_shift_mode('eco')
+        elif pp == 'balanced' and sm != 'comfort':
+            self.set_shift_mode('comfort')
+        elif pp == 'performance' and sm != 'turbo':
+            self.set_shift_mode('turbo')
+        return True
+
+    def set_shift_mode(self, value):
+        if not (value in ['auto', 'eco', 'comfort', 'turbo']):
+            print('error: unknown shift mode ' + str(value))
+            return
+        if self.get_shift_mode() == value:
+            return
+        if value == 'auto':
+            self.auto_shift_mode = True
+            return self._auto_shift_mode()
+        self.auto_shift_mode = False
+        return subprocess.getoutput('/usr/bin/isw-user -S ' + str(value))
+
+    def get_battery_threshold(self):
+        # 60, 80 or 100
+        return subprocess.getoutput('/usr/bin/isw-user -t')
+
+    def set_battery_threshold(self, value):
+        if not (value in [60, 80, 100]):
+            print('error: invalid value for battery threshold ' + str(value))
+            return
+        if self.get_battery_threshold() == value:
+            return
+        return subprocess.getoutput('/usr/bin/isw-user -t ' + str(value))
+
+    def get_usb_backlight(self):
+        # off, on, half or full
+        return subprocess.getoutput('/usr/bin/isw-user -u')
+
+    def set_usb_backlight(self, value):
+        if not (value in ['off', 'on', 'half', 'full']):
+            print('error: invalid value for usb backlight ' + str(value))
+        if self.get_usb_backlight() == value:
+            return
+        return subprocess.getoutput('/usr/bin/isw-user -u ' + str(value))
+
+    def get_cooler_boost(self):
+        # on, off
+        return subprocess.getoutput('/usr/bin/isw-user -b')
+
+    def set_cooler_boost(self, value):
+        if not (value in ['on', 'off']):
+            print('error: invalid value for cooler boost ' + str(value))
+        if self.get_cooler_boost() == value:
+            return
+        return subprocess.getoutput('/usr/bin/isw-user -b ' + str(value))
+
+    def main(self):
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        Gtk.main()
+
+if __name__ == '__main__':
+    indicator = ISWIndicator()
+    indicator.main()
