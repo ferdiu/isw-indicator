@@ -57,8 +57,10 @@ class ISWIndicator:
         self.menu_setup()
         self.ind.set_menu(self.menu)
         GLib.timeout_add(3000, self.indicator_loop)
+        self.set_shift_mode('auto', True)
 
     def indicator_loop(self):
+        self.update_ui()
         if self.auto_shift_mode:
             self._auto_shift_mode()
         return True # TODO: optimize
@@ -113,6 +115,31 @@ class ISWIndicator:
         self.menu.show_all()
         return self.menu
 
+    def update_ui(self):
+        sm = 'auto' if self.auto_shift_mode else self.get_shift_mode()
+        bt = self.get_battery_threshold()
+        ub = self.get_usb_backlight()
+        cb = self.get_cooler_boost()
+        for c in self.menu.get_children():
+            l = c.get_label()
+            if l == 'Shift Mode':
+                for c_ in c.get_submenu().get_children():
+                    if c_.get_label() == sm and not c_.get_active():
+                        c_.set_active(True)
+            elif l == 'Battery Threshold':
+                for c_ in c.get_submenu().get_children():
+                    if c_.get_label().split('-')[1] == str(bt) and not c_.get_active():
+                        c_.set_active(True)
+            elif l == 'USB Backlight':
+                for c_ in c.get_submenu().get_children():
+                    if c_.get_label() == ub and not c_.get_active():
+                        c_.set_active(True)
+            elif l == 'Cooler Boost':
+                if cb == 'on' and not c.get_active():
+                    c.set_active(True)
+                elif cb == 'off' and c.get_active():
+                    c.set_active(False)
+
     def get_power_profile(self):
         # performance, balanced or power-saver
         return subprocess.getoutput('/usr/bin/powerprofilesctl get')
@@ -128,17 +155,18 @@ class ISWIndicator:
         return subprocess.getoutput('/usr/bin/isw-user -S')
 
     def _auto_shift_mode(self):
-        pp = self.get_power_profile()
-        sm = self.get_shift_mode()
-        if pp == 'power-saver' and sm != 'eco':
-            self.set_shift_mode('eco')
-        elif pp == 'balanced' and sm != 'comfort':
-            self.set_shift_mode('comfort')
-        elif pp == 'performance' and sm != 'turbo':
-            self.set_shift_mode('turbo')
+        if self.auto_shift_mode:
+            pp = self.get_power_profile()
+            sm = self.get_shift_mode()
+            if pp == 'power-saver' and sm != 'eco':
+                self.set_shift_mode('eco', True)
+            elif pp == 'balanced' and sm != 'comfort':
+                self.set_shift_mode('comfort', True)
+            elif pp == 'performance' and sm != 'turbo':
+                self.set_shift_mode('turbo', True)
         return True
 
-    def set_shift_mode(self, value):
+    def set_shift_mode(self, value, auto = False):
         if not (value in ['auto', 'eco', 'comfort', 'turbo']):
             print('error: unknown shift mode ' + str(value))
             return
@@ -147,7 +175,7 @@ class ISWIndicator:
         if value == 'auto':
             self.auto_shift_mode = True
             return self._auto_shift_mode()
-        self.auto_shift_mode = False
+        self.auto_shift_mode = auto
         return subprocess.getoutput('/usr/bin/isw-user -S ' + str(value))
 
     def get_battery_threshold(self):
