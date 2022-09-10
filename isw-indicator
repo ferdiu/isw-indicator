@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os
 import subprocess
 import signal
 
@@ -74,7 +73,7 @@ class ISWIndicator:
         self.system_bus = dbus.SystemBus()
         self.updater = UpdateNeeded(self.session_bus, self.update_status)
         self.system_bus.add_signal_receiver(
-            lambda : apply_async(self.update_status),
+            self.update_status,
             dbus_interface="org.isw",
             path="/org/isw",
             message_keyword='messages'
