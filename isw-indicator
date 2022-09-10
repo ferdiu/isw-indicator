@@ -3,7 +3,6 @@
 import os
 import subprocess
 import signal
-import time
 
 import gi.repository
 
@@ -11,7 +10,10 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, GLib
 from gi.repository import AppIndicator3
+import dbus, dbus.proxies, dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
 
+# /usr/share/icons/Papirus/symbolic/status/starred-symbolic.svg
 # /usr/share/icons/Papirus/symbolic/status/power-profile-balanced-symbolic.svg
 # /usr/share/icons/Papirus/symbolic/status/power-profile-performance-symbolic.svg
 # /usr/share/icons/Papirus/symbolic/status/power-profile-power-saver-symbolic.svg
@@ -46,24 +48,54 @@ def _setup_radio_box(parent, label, func, options, actions, current_value = None
     submenu_item.show()
     return submenu_item
 
+class UpdateNeeded(dbus.service.Object):
+    def __init__(self, bus, update_func):
+        bus_name = dbus.service.BusName('org.isw', bus=bus)
+        dbus.service.Object.__init__(self, bus_name, '/org/isw')
+        self.update_func = update_func
+
+    @dbus.service.method('org.isw')
+    def update_needed(self):
+        return self.update_func()
+
+    @dbus.service.method('org.isw')
+    def Quit(self):
+        self.remove_from_connection()
+        Gtk.main_quit()
+        return
 
 class ISWIndicator:
     def __init__(self):
+        DBusGMainLoop(set_as_default=True)
         self.ind = AppIndicator3.Indicator.new('ISW Indicator', '', AppIndicator3.IndicatorCategory.APPLICATION_STATUS)
         self.ind.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
         self.ind.set_icon_full('/usr/share/isw-indicator/msi-logo-symbolic.svg', 'ISW Center')
+        self.session_bus = dbus.SessionBus()
+        self.system_bus = dbus.SystemBus()
+        self.updater = UpdateNeeded(self.session_bus, self.update_status)
+        self.system_bus.add_signal_receiver(
+            lambda : apply_async(self.update_status),
+            dbus_interface="org.isw",
+            path="/org/isw",
+            message_keyword='messages'
+        )
+        self.system_bus.add_signal_receiver(
+            self.update_status,
+            dbus_interface="org.freedesktop.DBus.Properties",
+            path="/net/hadess/PowerProfiles",
+            message_keyword='messages'
+        )
         self.auto_shift_mode = True
 
         self.menu_setup()
         self.ind.set_menu(self.menu)
-        GLib.timeout_add(3000, self.indicator_loop)
         self.set_shift_mode('auto', True)
-
-    def indicator_loop(self):
-        self.update_ui()
+        self.mainloop = GLib.MainLoop()
+    
+    def update_status(self, *args, **messages):
         if self.auto_shift_mode:
             self._auto_shift_mode()
-        return True # TODO: optimize
+        self.update_ui()
 
     def menu_setup(self):
         self.menu = Gtk.Menu()
@@ -176,7 +208,7 @@ class ISWIndicator:
             self.auto_shift_mode = True
             return self._auto_shift_mode()
         self.auto_shift_mode = auto
-        return subprocess.getoutput('/usr/bin/isw-user -S ' + str(value))
+        return subprocess.getoutput('/usr/bin/isw-user -D -S ' + str(value))
 
     def get_battery_threshold(self):
         # 60, 80 or 100
@@ -188,7 +220,7 @@ class ISWIndicator:
             return
         if self.get_battery_threshold() == value:
             return
-        return subprocess.getoutput('/usr/bin/isw-user -t ' + str(value))
+        return subprocess.getoutput('/usr/bin/isw-user -D -t ' + str(value))
 
     def get_usb_backlight(self):
         # off, on, half or full
@@ -199,7 +231,7 @@ class ISWIndicator:
             print('error: invalid value for usb backlight ' + str(value))
         if self.get_usb_backlight() == value:
             return
-        return subprocess.getoutput('/usr/bin/isw-user -u ' + str(value))
+        return subprocess.getoutput('/usr/bin/isw-user -D -u ' + str(value))
 
     def get_cooler_boost(self):
         # on, off
@@ -210,11 +242,11 @@ class ISWIndicator:
             print('error: invalid value for cooler boost ' + str(value))
         if self.get_cooler_boost() == value:
             return
-        return subprocess.getoutput('/usr/bin/isw-user -b ' + str(value))
+        return subprocess.getoutput('/usr/bin/isw-user -D -b ' + str(value))
 
     def main(self):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
-        Gtk.main()
+        self.mainloop.run()
 
 if __name__ == '__main__':
     indicator = ISWIndicator()
